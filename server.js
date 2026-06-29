@@ -262,3 +262,75 @@ app.post("/api/auth/logout", (req, res) => {
   });
   return res.json({ message: "Logged out successfully" });
 });
+// Get Current User (me)
+app.get("/api/auth/me", async (req, res) => {
+  const token = req.cookies.token;
+  if (!token) {
+    return res.json({ user: null });
+  }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await db.users.findOne({ _id: decoded.userId });
+    if (!user) {
+      return res.json({ user: null });
+    }
+    const { password: _, ...userWithoutPassword } = user;
+    return res.json({ user: userWithoutPassword });
+  } catch (error) {
+    return res.json({ user: null });
+  }
+});
+
+// Update Profile
+app.put("/api/auth/profile", authMiddleware, async (req, res) => {
+  const { name, photoUrl, password } = req.body;
+
+  if (!name || !photoUrl) {
+    return res.status(400).json({ error: "Name and photo URL are required" });
+  }
+
+  try {
+    const user = await db.users.findOne({ _id: req.user.id });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const updateData = { name, photoUrl };
+
+    if (password) {
+      if (password.length < 6) {
+        return res
+          .status(400)
+          .json({ error: "Password must be at least 6 characters long" });
+      }
+      if (!/[A-Z]/.test(password)) {
+        return res.status(400).json({
+          error: "Password must contain at least one uppercase letter",
+        });
+      }
+      if (!/[a-z]/.test(password)) {
+        return res.status(400).json({
+          error: "Password must contain at least one lowercase letter",
+        });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+      updateData.password = hashedPassword;
+    }
+
+    const updatedUser = await db.users.findByIdAndUpdate(
+      req.user.id,
+      updateData,
+    );
+    const { password: _, ...userWithoutPassword } = updatedUser;
+
+    return res.json({
+      message: "Profile updated successfully",
+      user: userWithoutPassword,
+    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to update profile" });
+  }
+});
