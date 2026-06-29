@@ -44,3 +44,20 @@ app.use(
 // Middlewares
 app.use(express.json());
 app.use(cookieParser());
+
+// Authentication Middleware
+export function authMiddleware(req, res, next) {
+  const token = req.cookies.token;
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized: No token provided" });
+  }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = { id: decoded.userId };
+    next();
+  } catch (error) {
+    return res
+      .status(401)
+      .json({ error: "Unauthorized: Invalid or expired token" });
+  }
+}
