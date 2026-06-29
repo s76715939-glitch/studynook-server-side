@@ -444,3 +444,113 @@ app.delete("/api/rooms/:id", authMiddleware, async (req, res) => {
       .json({ error: error.message || "Failed to delete room" });
   }
 });
+// ==========================================
+// Bookings Endpoints
+// ==========================================
+app.post("/api/bookings", authMiddleware, async (req, res) => {
+  const { roomId, date, startTime, endTime, specialNote } = req.body;
+  if (!roomId || !date || !startTime || !endTime) {
+    return res
+      .status(400)
+      .json({ error: "Room ID, date, start time, and end time are required" });
+  }
+
+  const todayStr = new Date().toISOString().split("T")[0];
+  if (date < todayStr) {
+    return res
+      .status(400)
+      .json({ error: "Booking date cannot be in the past" });
+  }
+
+  const startHour = parseInt(startTime.split(":")[0]);
+  const endHour = parseInt(endTime.split(":")[0]);
+  if (endHour <= startHour) {
+    return res.status(400).json({ error: "End time must be after start time" });
+  }
+
+  try {
+    const room = await db.rooms.findById(roomId);
+    if (!room) return res.status(404).json({ error: "Room not found" });
+
+    const isConflict = await db.bookings.checkConflict(
+      roomId,
+      date,
+      startTime,
+      endTime,
+    );
+    if (isConflict) {
+      return res.status(409).json({
+        error:
+          "Double-booking detected: This room is already booked for the selected time slot.",
+      });
+    }
+
+    const totalCost = (endHour - startHour) * room.hourlyRate;
+    const newBooking = await db.bookings.create({
+      roomId,
+      userId: req.user.id,
+      date,
+      startTime,
+      endTime,
+      totalCost,
+      specialNote: specialNote || "",
+      status: "confirmed",
+    });
+
+    return res
+      .status(201)
+      .json({ message: "Room booked successfully!", booking: newBooking });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to make booking" });
+  }
+});
+
+app.get("/api/bookings/my", authMiddleware, async (req, res) => {
+  try {
+    const bookings = await db.bookings.find({ userId: req.user.id });
+    return res.json(bookings);
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to retrieve bookings" });
+  }
+});
+
+app.patch("/api/bookings/:id/cancel", authMiddleware, async (req, res) => {
+  try {
+    const booking = await db.bookings.findById(req.params.id);
+    if (!booking) return res.status(404).json({ error: "Booking not found" });
+    if (booking.userId.toString() !== req.user.id) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: You did not make this booking" });
+    }
+
+    const todayStr = new Date().toISOString().split("T")[0];
+    if (booking.date < todayStr) {
+      return res
+        .status(400)
+        .json({ error: "Cannot cancel bookings in the past or on past dates" });
+    }
+
+    const updatedBooking = await db.bookings.findByIdAndUpdate(req.params.id, {
+      status: "cancelled",
+    });
+    return res.json({ message: "Booking cancelled", booking: updatedBooking });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to cancel booking" });
+  }
+});
+
+app.get("/", (req, res) => {
+  res.status(200).send("StudyNook Backend Server is running successfully!");
+});
+
+// Standalone Production Server listener setup
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`StudyNook backend running securely on port ${PORT}`);
+});
+
+export default app;
