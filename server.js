@@ -157,3 +157,108 @@ app.post("/api/auth/login", async (req, res) => {
       .json({ error: error.message || "Internal server error" });
   }
 });
+
+// Get dynamic Google Client ID for the frontend
+app.get("/api/auth/google/client-id", (req, res) => {
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    console.warn(
+      "WARNING: GOOGLE_CLIENT_ID is not set in the server's environment (.env)!",
+    );
+  }
+  res.json({ clientId: process.env.GOOGLE_CLIENT_ID || "" });
+});
+
+// Continue with Google (Secure Token Verification & Fallback)
+app.post("/api/auth/google", async (req, res) => {
+  const { credential, name, email, photoUrl } = req.body;
+
+  let finalEmail = email;
+  let finalName = name;
+  let finalPhoto = photoUrl;
+
+  if (credential) {
+    try {
+      const verifyRes = await fetch(
+        `https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`,
+      );
+      if (verifyRes.ok) {
+        const payload = await verifyRes.json();
+        const allowedClientIds = [process.env.GOOGLE_CLIENT_ID].filter(Boolean);
+
+        if (allowedClientIds.includes(payload.aud)) {
+          finalEmail = payload.email;
+          finalName = payload.name;
+          finalPhoto = payload.picture;
+        } else {
+          return res.status(400).json({
+            error:
+              "Google auth failed: Audience/Client ID mismatch. Make sure GOOGLE_CLIENT_ID is configured in .env.",
+          });
+        }
+      } else {
+        return res
+          .status(400)
+          .json({ error: "Google auth failed: Invalid credential token" });
+      }
+    } catch (err) {
+      console.error("Error verifying Google token:", err);
+    }
+  }
+
+  if (!finalEmail || !finalName) {
+    return res.status(400).json({
+      error: "Google authentication failed: Name and Email are required",
+    });
+  }
+
+  try {
+    let user = await db.users.findOne({ email: finalEmail });
+
+    // Create user if they don't exist yet
+    if (!user) {
+      const randomPassword = Math.random().toString(36) + "Gg1!";
+      const hashedPassword = await bcrypt.hash(randomPassword, 10);
+      user = await db.users.create({
+        name: finalName,
+        email: finalEmail,
+        photoUrl:
+          finalPhoto ||
+          "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=120",
+        password: hashedPassword,
+        isGoogle: true,
+      });
+    } else if (!user.isGoogle) {
+      user = await db.users.findByIdAndUpdate(user._id, { isGoogle: true });
+    }
+
+    // Sign JWT
+    const token = jwt.sign({ userId: user._id }, JWT_SECRET, {
+      expiresIn: "7d",
+    });
+
+    // Set cookie
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "none", // Allow secure cookies across domains
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    });
+
+    const { password: _, ...userWithoutPassword } = user;
+    return res.json({ user: userWithoutPassword });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ error: error.message || "Internal server error" });
+  }
+});
+
+// Logout
+app.post("/api/auth/logout", (req, res) => {
+  res.clearCookie("token", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "none",
+  });
+  return res.json({ message: "Logged out successfully" });
+});
