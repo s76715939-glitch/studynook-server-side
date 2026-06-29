@@ -334,3 +334,113 @@ app.put("/api/auth/profile", authMiddleware, async (req, res) => {
       .json({ error: error.message || "Failed to update profile" });
   }
 });
+// ==========================================
+// Rooms Endpoints
+// ==========================================
+app.get("/api/rooms", async (req, res) => {
+  const search = req.query.search || "";
+  const limit = req.query.limit ? parseInt(req.query.limit) : undefined;
+  const sortLatest = req.query.latest === "true";
+
+  let amenities = [];
+  if (req.query.amenities) {
+    amenities = Array.isArray(req.query.amenities)
+      ? req.query.amenities
+      : [req.query.amenities];
+  }
+
+  try {
+    const rooms = await db.rooms.find({ search, amenities, limit, sortLatest });
+    return res.json(rooms);
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to retrieve rooms" });
+  }
+});
+
+app.get("/api/rooms/:id", async (req, res) => {
+  try {
+    const room = await db.rooms.findById(req.params.id);
+    if (!room) return res.status(404).json({ error: "Room not found" });
+    return res.json(room);
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to fetch room details" });
+  }
+});
+
+app.post("/api/rooms", authMiddleware, async (req, res) => {
+  const { name, description, image, floor, capacity, hourlyRate, amenities } =
+    req.body;
+  if (!name || !description || !image || !floor || !capacity || !hourlyRate) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+  try {
+    const newRoom = await db.rooms.create({
+      name,
+      description,
+      image,
+      floor,
+      capacity: Number(capacity),
+      hourlyRate: Number(hourlyRate),
+      amenities: amenities || [],
+      ownerId: req.user.id,
+    });
+    return res
+      .status(201)
+      .json({ message: "Room added successfully", room: newRoom });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to create room" });
+  }
+});
+
+app.put("/api/rooms/:id", authMiddleware, async (req, res) => {
+  const { name, description, image, floor, capacity, hourlyRate, amenities } =
+    req.body;
+  try {
+    const room = await db.rooms.findById(req.params.id);
+    if (!room) return res.status(404).json({ error: "Room not found" });
+    if (room.ownerId !== req.user.id) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: You do not own this room" });
+    }
+    const updatedRoom = await db.rooms.findByIdAndUpdate(req.params.id, {
+      name,
+      description,
+      image,
+      floor,
+      capacity: Number(capacity),
+      hourlyRate: Number(hourlyRate),
+      amenities: amenities || [],
+    });
+    return res.json({
+      message: "Room updated successfully",
+      room: updatedRoom,
+    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to update room" });
+  }
+});
+
+app.delete("/api/rooms/:id", authMiddleware, async (req, res) => {
+  try {
+    const room = await db.rooms.findById(req.params.id);
+    if (!room) return res.status(404).json({ error: "Room not found" });
+    if (room.ownerId !== req.user.id) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: You do not own this room" });
+    }
+    await db.rooms.findByIdAndDelete(req.params.id);
+    return res.json({ message: "Room deleted successfully" });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to delete room" });
+  }
+});
